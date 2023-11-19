@@ -1,0 +1,913 @@
+---
+title: "Coding Event Data with GPT"
+format: 
+  revealjs:
+    theme: solarized
+    self-contained: true
+editor: visual
+execute: 
+  echo: true
+---
+
+## The problem
+
+::: columns
+::: {.column width="30%"}
+![](img/nyt.png)
+:::
+
+::: {.column width="30%"}
+![](img/nexis.png)
+:::
+
+::: {.column width="30%"}
+![](img/archival.jpeg)
+:::
+:::
+
+## Define your broad corpus
+
+Find a set of keywords that appear in your corpus.
+
+This could include:
+
+-   Event terms, for example: "protest", "vote", "bombing"
+
+-   Actor names or identifiers, for example: "Biden", "LTTE", "Prime Minister"
+
+::: aside
+You should use **regular expressions** to capture different versions of your key words. For example, "protest\*" will capture "protest", "protests", "protesting", and "protested"
+:::
+
+## Collect your broad corpus
+
+Collect all articles or text sources that include your keywords.
+
+Sources could include:
+
+-   APIs
+
+-   Web scraping
+
+::: aside
+Getting access to a large collection of news articles is very expensive. This can be the biggest barrier to this approach.
+:::
+
+## My broad corpus
+
+```{r}
+library(tidyverse)
+
+all_articles <- read_csv(here::here("reports", "data", "all_articles.csv"))
+all_articles
+```
+
+## Whittle this broad corpus down
+
+You now need to work out which of these articles actually include information on your events and actors.
+
+We are going to ask GPT to tell us the following:
+
+> Identify with 'yes' or 'no' whether the following article mentions a meeting or event involving representatives of at least two countries, or of at least one country and organization, in which they discuss a conflict involving at least one of those countries.
+
+::: aside
+Building a good prompt is critical to your success.
+:::
+
+## Building your prompt
+
+Your prompt needs to be:
+
+-   Specific,
+
+-   Concise,
+
+-   Simple.
+
+::: aside
+You will probably want to experiment with several different prompts.
+:::
+
+## Working with a single article
+
+Let's head over to [ChatGPT](https://chat.openai.com/) and see this classification task in action:
+
+![](img/ChatGPT_input.png)
+
+## How did it go?
+
+![](img/ChatGPT_output.png)
+
+## Working with many articles
+
+This is great, but what if you have many, *many* articles that you need to code?
+
+Let's use R to help us out!
+
+For each article, we want to:
+
+1.  Build a prompt,
+2.  Run a GPT model of our choice against that prompt,
+3.  Record its response in a data frame.
+
+## Building your prompt
+
+First, we need to start with our base prompt:
+
+```{r}
+base_prompt <- "Identify with 'yes' or 'no' whether the following article (delimited in XML tags) mentions a meeting or event involving representatives of at least two countries, or of at least one country and organization, in which they discuss a conflict involving at least one of those countries: <article>{article_body}</article>"
+base_prompt
+```
+
+::: aside
+Notice the more precise markers (XML tags). These delineate the article for the GPT model.
+:::
+
+## Building your prompt
+
+Next, we need to include our article text:
+
+```{r}
+article_body <- all_articles |> 
+  # Select the first article
+  slice(1) |> 
+  # Pull out the text
+  pull(text)
+article_body
+```
+
+## Building your prompt
+
+Finally, we need to add this article body into our prompt:
+
+```{r}
+article_prompt <- glue::glue(base_prompt)
+article_prompt
+```
+
+::: aside
+Check out the `glue()` function from the [`glue` package](https://glue.tidyverse.org/) for easy ways to include R coding into strings.
+:::
+
+## Run a GPT model against this prompt
+
+The end goal:
+
+```{r}
+#| eval: false
+
+library(httr2)
+
+req <- request("https://api.openai.com/v1/chat/completions") |>
+  req_headers("Content-Type" = "application/json",
+              "Authorization" = paste("Bearer", Sys.getenv("OPENAI_API_KEY_NSF"))) |>
+  req_body_json(
+    list(
+      "model" = "gpt-3.5-turbo-0613",
+      "messages" = list(
+        list(
+          "role" = "system",
+          "content" = "You are a helpful assistant."
+        ),
+        list(
+          "role" = "user",
+          "content" = prompt
+        )
+      ),
+      "temperature" = 0,
+      "max_tokens" = 1
+    )
+  ) |>
+  req_retry(max_tries = 3)
+```
+
+## Building your API request
+
+We are going to take advantage of the fantastic [`httr2` R package](https://httr2.r-lib.org/) to work with the OpenAI API.
+
+First, we need to build our request to the API. You need:
+
+-   The API endpoint,
+
+-   The content type with which you would like to work,
+
+-   Your authorization to use the API,
+
+-   Your chosen GPT model,
+
+-   Your model parameters.
+
+## The API endpoint
+
+The endpoint depends on the type of GPT model you want to use.
+
+For classification tasks, we have two options:
+
+-   **Chat completion models**,
+
+-   **Completion models**.
+
+## The API endpoint
+
+The base URL for chat completion models is:
+
+> <https://api.openai.com/v1/chat/completions>
+
+The base URL for completion models is:
+
+> <https://api.openai.com/v1/completions>
+
+::: aside
+We will focus on chat completion models, which tend to perform better.
+:::
+
+## The API endpoint
+
+```{r}
+#| eval: false
+#| code-line-numbers: "1"
+
+req <- request("https://api.openai.com/v1/chat/completions") |>
+  req_headers("Content-Type" = "application/json",
+              "Authorization" = paste("Bearer", Sys.getenv("OPENAI_API_KEY_NSF"))) |>
+  req_body_json(
+    list(
+      "model" = "gpt-3.5-turbo-0613",
+      "messages" = list(
+        list(
+          "role" = "system",
+          "content" = "You are a helpful assistant."
+        ),
+        list(
+          "role" = "user",
+          "content" = prompt
+        )
+      ),
+      "temperature" = 0,
+      "max_tokens" = 1
+    )
+  ) |>
+  req_retry(max_tries = 3)
+```
+
+::: {aside}
+`httr2::request()` takes that URL as its first argument.
+:::
+
+## Content type
+
+Most modern APIs are stored using **JSON**, which is a very light-weight way of sharing data.
+
+![Source: Stack Overflow](img/json_example.png)
+
+## Content type
+
+```{r}
+#| eval: false
+#| code-line-numbers: "2"
+
+req <- request("https://api.openai.com/v1/chat/completions") |>
+  req_headers("Content-Type" = "application/json",
+              "Authorization" = paste("Bearer", Sys.getenv("OPENAI_API_KEY_NSF"))) |>
+  req_body_json(
+    list(
+      "model" = "gpt-3.5-turbo-0613",
+      "messages" = list(
+        list(
+          "role" = "system",
+          "content" = "You are a helpful assistant."
+        ),
+        list(
+          "role" = "user",
+          "content" = prompt
+        )
+      ),
+      "temperature" = 0,
+      "max_tokens" = 1
+    )
+  ) |>
+  req_retry(max_tries = 3)
+```
+
+::: aside
+We specify that we want to work with this structure by appending `application/json` to our API request URL using `httr2::req_headers()`.
+:::
+
+## Authorization
+
+[It is not free to use GPT.]{.underline}
+
+You will need:
+
+-   A subscription,
+
+-   An API key.
+
+::: aside
+Head over to <https://platform.openai.com/api-keys> to set up your API key.
+:::
+
+## Authorization
+
+You should *never* hard code an API key into an R script.
+
+Instead, save it in your R environment:
+
+```{r}
+Sys.setenv("OPENAI_API_DEMO" = "XXXXXXXXXXXXXXXXXXXXXX")
+```
+
+Now you can use the API key without writing it out directly:
+
+```{r}
+Sys.getenv("OPENAI_API_DEMO")
+```
+
+## Authorization
+
+```{r}
+#| eval: false
+#| code-line-numbers: "3,4"
+
+req <- request("https://api.openai.com/v1/chat/completions") |>
+  req_headers("Content-Type" = "application/json",
+              "Authorization" = paste("Bearer", 
+                                      Sys.getenv("OPENAI_API_PERSONAL"))) |>
+  req_body_json(
+    list(
+      "model" = "gpt-3.5-turbo-0613",
+      "messages" = list(
+        list(
+          "role" = "system",
+          "content" = "You are a helpful assistant."
+        ),
+        list(
+          "role" = "user",
+          "content" = prompt
+        )
+      ),
+      "temperature" = 0,
+      "max_tokens" = 1
+    )
+  ) |>
+  req_retry(max_tries = 3)
+```
+
+::: aside
+We can append our API key to our request using `httr2::req_headers()`.
+:::
+
+## Selecting your GPT model
+
+There are many different families of GPT models:
+
+![Source: OpenAI API documentation](img/GPT_models.png)
+
+## Selecting your GPT model
+
+We are working with chat completion models:
+
+-   `gpt-4`
+
+-   `gpt-4 turbo`
+
+-   `gpt-3.5-turbo`
+
+::: aside
+You should always start with the most simple (and cheap) model. See if it performs well before moving to more complex models.
+:::
+
+## Selecting your GPT model
+
+```{r}
+#| eval: false
+#| code-line-numbers: "7"
+
+req <- request("https://api.openai.com/v1/chat/completions") |>
+  req_headers("Content-Type" = "application/json",
+              "Authorization" = paste("Bearer", 
+                                      Sys.getenv("OPENAI_API_PERSONAL"))) |>
+  req_body_json(
+    list(
+      "model" = "gpt-3.5-turbo",
+      "messages" = list(
+        list(
+          "role" = "system",
+          "content" = "You are a helpful assistant."
+        ),
+        list(
+          "role" = "user",
+          "content" = prompt
+        )
+      ),
+      "temperature" = 0,
+      "max_tokens" = 1
+    )
+  ) |>
+  req_retry(max_tries = 3)
+```
+
+::: aside
+We specify our selected model in the request body using `httr2::req_body_json()`.
+:::
+
+## Specifying the role we want GPT to play
+
+GPT can play many different roles. You can be very creative here and specify exactly what role you would like GPT to play.
+
+For example, you can ask GPT to respond like:
+
+-   An academic colleague,
+
+-   A reviewer,
+
+-   Shakespeare.
+
+## Specifying the role we want GPT to play
+
+```{r}
+#| eval: false
+#| code-line-numbers: "10,11"
+
+req <- request("https://api.openai.com/v1/chat/completions") |>
+  req_headers("Content-Type" = "application/json",
+              "Authorization" = paste("Bearer", 
+                                      Sys.getenv("OPENAI_API_PERSONAL"))) |>
+  req_body_json(
+    list(
+      "model" = "gpt-3.5-turbo",
+      "messages" = list(
+        list(
+          "role" = "system",
+          "content" = "You are a helpful assistant."
+        ),
+        list(
+          "role" = "user",
+          "content" = prompt
+        )
+      ),
+      "temperature" = 0,
+      "max_tokens" = 1
+    )
+  ) |>
+  req_retry(max_tries = 3)
+```
+
+## Include your prompt
+
+```{r}
+#| eval: false
+#| code-line-numbers: "14,15"
+
+req <- request("https://api.openai.com/v1/chat/completions") |>
+  req_headers("Content-Type" = "application/json",
+              "Authorization" = paste("Bearer", 
+                                      Sys.getenv("OPENAI_API_PERSONAL"))) |>
+  req_body_json(
+    list(
+      "model" = "gpt-3.5-turbo",
+      "messages" = list(
+        list(
+          "role" = "system",
+          "content" = "You are a helpful assistant."
+        ),
+        list(
+          "role" = "user",
+          "content" = prompt
+        )
+      ),
+      "temperature" = 0,
+      "max_tokens" = 1
+    )
+  ) |>
+  req_retry(max_tries = 3)
+```
+
+## Specify your model parameters: `temperature`
+
+The `temperature` parameter controls how random the model output will be.
+
+-   It takes a value between 0 and 2, where 2 is very random and 0 is not random.
+
+For classification tasks, we want a straightforward "Yes" or "No" answer. In other words, we want no randomness. 
+
+::: aside
+It is useful to think of randomness like creativity: the higher the temperature, the more creative the text output will be.
+:::
+
+## Specify your model parameters: `temperature`
+
+```{r}
+#| eval: false
+#| code-line-numbers: "18"
+
+req <- request("https://api.openai.com/v1/chat/completions") |>
+  req_headers("Content-Type" = "application/json",
+              "Authorization" = paste("Bearer", 
+                                      Sys.getenv("OPENAI_API_PERSONAL"))) |>
+  req_body_json(
+    list(
+      "model" = "gpt-3.5-turbo",
+      "messages" = list(
+        list(
+          "role" = "system",
+          "content" = "You are a helpful assistant."
+        ),
+        list(
+          "role" = "user",
+          "content" = prompt
+        )
+      ),
+      "temperature" = 0,
+      "max_tokens" = 1
+    )
+  ) |>
+  req_retry(max_tries = 3)
+```
+
+## Specify your model parameters: `max_tokens`
+
+A **token** represents a group of characters (sometimes whole words) that is meaningful to the GPT model.
+
+![Source: OpenAI API documentation](img/tokens.png)
+
+## Specify your model parameters: `max_tokens`
+
+The `max_tokens` parameter sets the maximum number of tokens the output can produce.
+
+-   We want "Yes" or "No". These are represented by one token.
+
+-   You can check out how many tokens your output will be using the [OpenAI Tokenizer](https://platform.openai.com/tokenizer).
+
+## Specify your model parameters: `max_tokens`
+
+```{r}
+#| eval: false
+#| code-line-numbers: "19"
+
+req <- request("https://api.openai.com/v1/chat/completions") |>
+  req_headers("Content-Type" = "application/json",
+              "Authorization" = paste("Bearer", 
+                                      Sys.getenv("OPENAI_API_PERSONAL"))) |>
+  req_body_json(
+    list(
+      "model" = "gpt-3.5-turbo",
+      "messages" = list(
+        list(
+          "role" = "system",
+          "content" = "You are a helpful assistant."
+        ),
+        list(
+          "role" = "user",
+          "content" = prompt
+        )
+      ),
+      "temperature" = 0,
+      "max_tokens" = 1
+    )
+  ) |>
+  req_retry(max_tries = 3)
+```
+
+## Specify your model parameters
+
+There are many different parameters you can control when using chat completion models. 
+
+Check out the full list in the [OpenAI documentation](https://platform.openai.com/docs/api-reference/chat/create). 
+
+## Make your requests more robust
+
+Sometimes, your request will fail. You can ask R to retry your request using `httr2::req_retry()`. 
+
+```{r}
+#| eval: false
+#| code-line-numbers: "22"
+
+req <- request("https://api.openai.com/v1/chat/completions") |>
+  req_headers("Content-Type" = "application/json",
+              "Authorization" = paste("Bearer", 
+                                      Sys.getenv("OPENAI_API_PERSONAL"))) |>
+  req_body_json(
+    list(
+      "model" = "gpt-3.5-turbo",
+      "messages" = list(
+        list(
+          "role" = "system",
+          "content" = "You are a helpful assistant."
+        ),
+        list(
+          "role" = "user",
+          "content" = prompt
+        )
+      ),
+      "temperature" = 0,
+      "max_tokens" = 1
+    )
+  ) |>
+  req_retry(max_tries = 3)
+```
+
+## Run the GPT model for one article
+
+We are ready to make that API request! 
+
+-   We have our prompt: 
+
+```{r}
+article_prompt
+```
+
+## Run the GPT model for one article
+
+We are ready to make that API request! 
+
+-   Which we can insert into our fully fleshed out request: 
+
+```{r}
+#| eval: false
+
+req <- request("https://api.openai.com/v1/chat/completions") |>
+  req_headers("Content-Type" = "application/json",
+              "Authorization" = paste("Bearer", 
+                                      Sys.getenv("OPENAI_API_PERSONAL"))) |>
+  req_body_json(
+    list(
+      "model" = "gpt-3.5-turbo",
+      "messages" = list(
+        list(
+          "role" = "system",
+          "content" = "You are a helpful assistant."
+        ),
+        list(
+          "role" = "user",
+          "content" = article_prompt
+        )
+      ),
+      "temperature" = 0,
+      "max_tokens" = 1
+    )
+  ) |>
+  req_retry(max_tries = 3)
+```
+
+## Run the GPT model for one article
+
+Now we just need to perform that request: 
+
+```{r}
+#| echo: false
+
+resp <- read_rds(here::here("reports", "data", "one_article_resp.rds"))
+```
+
+```{r}
+#| eval: false
+
+resp <- req_perform(req)
+```
+
+And see the response: 
+
+```{r}
+resp
+```
+
+## GPT's response
+
+Let's break down this response:
+
+```{r}
+resp
+```
+
+## But where is the prediction?
+
+Welcome to the JSON rabbit hole...
+
+```{r}
+#| echo: false
+
+library(httr2)
+```
+
+```{r}
+resp_body_json(resp)
+```
+
+## But where is the prediction?
+
+Welcome to the JSON rabbit hole...
+
+```{r}
+resp_body_json(resp)$choices
+```
+
+## But where is the prediction?
+
+Welcome to the JSON rabbit hole...
+
+```{r}
+resp_body_json(resp)$choices[[1]]$message
+```
+
+## But where is the prediction?
+
+Welcome to the JSON rabbit hole...
+
+```{r}
+resp_body_json(resp)$choices[[1]]$message$content
+```
+
+## Save the prediction
+
+```{r}
+pred <- resp_body_json(resp)$choices[[1]]$message$content
+
+df <- tibble(
+    body = article_body,
+    gpt_pred = pred
+  )
+
+df
+```
+
+## Congratulations!
+
+You have now used an advanced large language model to identify whether an event is referenced in a news article. 
+
+<br>
+
+Let's set you up to do that across all `r nrow(all_articles) |> scales::comma()` articles.
+
+## Building your article reader function
+
+End goal:
+
+```{r}
+article_classification <- function(article_body) {
+  
+  # Create your prompt
+  article_prompt <- glue::glue("Identify with 'yes' or 'no' whether the following article (delimited in XML tags) mentions a meeting or event involving representatives of at least two countries, or of at least one country and organization, in which they discuss a conflict involving at least one of those countries: <article>{article_body}</article>")
+  
+  # Build your request
+  req <- request("https://api.openai.com/v1/chat/completions") |>
+  req_headers("Content-Type" = "application/json",
+              "Authorization" = paste("Bearer", 
+                                      Sys.getenv("OPENAI_API_PERSONAL"))) |>
+  req_body_json(
+    list(
+      "model" = "gpt-3.5-turbo",
+      "messages" = list(
+        list(
+          "role" = "system",
+          "content" = "You are a helpful assistant."
+        ),
+        list(
+          "role" = "user",
+          "content" = article_prompt
+        )
+      ),
+      "temperature" = 0,
+      "max_tokens" = 1
+    )
+  ) |>
+  req_retry(max_tries = 3)
+  
+  # Perform your request
+  resp <- req_perform(req)
+  
+  # Clean up the response
+  pred <- resp_body_json(resp)$choices[[1]]$message$content
+  
+  # Save the response
+  df <- tibble(
+    body = article_body,
+    gpt_pred = pred
+  )
+  
+  return(df)
+  
+}
+```
+
+## Running our function across our articles
+
+```{r}
+#| eval: false
+
+labelled_articles <- map(
+  1:5, 
+  ~ all_articles |>
+      slice(.x) |>
+      pull(text) |>
+      article_classification()
+) |> 
+  bind_rows()
+```
+
+::: aside
+`purrr::map()` is a tidy method for looping. `dplyr::bind_rows()` appends the resulting data frame to the previous output, creating our full data frame. 
+:::
+
+## The result
+
+```{r}
+#| echo: false
+
+labelled_articles <- read_csv(here::here("reports", "data", "five_articles_results.csv"))
+```
+
+```{r}
+labelled_articles
+```
+
+## Some tips: token limits
+
+There are (very large) character limits for your prompts.
+
+- For `gpt-3.5-turbo`, it is 4,096 tokens.
+
+A token is roughly four characters (in English).
+
+## Some tips: token limits
+
+To make sure your prompts do not go over this limit, add this:
+
+```{r}
+#| code-line-numbers: "6,46,47,48,49,50"
+
+article_classification <- function(article_body) {
+  
+  # Create your prompt
+  article_prompt <- glue::glue("Identify with 'yes' or 'no' whether the following article (delimited in XML tags) mentions a meeting or event involving representatives of at least two countries, or of at least one country and organization, in which they discuss a conflict involving at least one of those countries: <article>{article_body}</article>")
+  
+  if (nchar(article_prompt) / 4 > 4096) {
+    
+    # Build your request
+    req <- request("https://api.openai.com/v1/chat/completions") |>
+    req_headers("Content-Type" = "application/json",
+                "Authorization" = paste("Bearer", 
+                                        Sys.getenv("OPENAI_API_PERSONAL"))) |>
+    req_body_json(
+      list(
+        "model" = "gpt-3.5-turbo",
+        "messages" = list(
+          list(
+            "role" = "system",
+            "content" = "You are a helpful assistant."
+          ),
+          list(
+            "role" = "user",
+            "content" = article_prompt
+          )
+        ),
+        "temperature" = 0,
+        "max_tokens" = 1
+      )
+    ) |>
+    req_retry(max_tries = 3)
+  
+    # Perform your request
+    resp <- req_perform(req)
+  
+    # Clean up the response
+    pred <- resp_body_json(resp)$choices[[1]]$message$content
+  
+    # Save the response
+    df <- tibble(
+      body = article_body,
+      gpt_pred = pred
+   )
+  
+    return(df)
+    
+  } else {
+    
+    stop("Prompt exceeds token limit.")
+    
+  }
+  
+}
+```
+
+## Some tips: clean your input
+
+You will often have junk in your text (for example, paragraph delimiters or news agency bylines). Removing this: 
+
+-   Increases the likelihood that you won't reach the token limit, 
+
+-   Reduces your use costs,
+
+-   Can produce more accurate results.
+
+## Some tips: evaluating your model
+
+You should check whether or not the model is correctly identifying relevant articles. 
+
+-   Select some labelled articles at random and hand code them. 
+
+-   Evaluate how accurate your model is performing.
+
+::: aside
+Extension: you can fine-tune these models using labelled data to produce a GPT model that is designed to address your specific classification task.
+:::
